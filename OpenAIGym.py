@@ -105,7 +105,7 @@ class ArmEnv(object):
     state_dim = 21
     action_dim = 7
 
-    def __init__(self, sim_port=19997):
+    def __init__(self, sim_port=23000):
         self.sim_port = sim_port
         self.connect_to_Coppeliasim()
         self.retrieve_Object_Handles()
@@ -124,11 +124,11 @@ class ArmEnv(object):
         self.client = RemoteAPIClient(port=self.sim_port)
         # 如果库版本不支持，可以考虑在 require 时传入参数（参照文档）
         self.sim = self.client.require('sim')
+
         self.clientID = 0  # 占位，实际连接成功后无须使用
         print(f"Connected to remote API server on port {self.sim_port}")
         # 为了保险起见，也可以等待一小段时间确保连接稳定：
         time.sleep(1)
-
 
     def retrieve_Object_Handles(self):
         self.arm_joint = {}
@@ -142,10 +142,17 @@ class ArmEnv(object):
         self.goal = self.sim.getObject('/goal')
         self.tip = self.sim.getObject('/tip')
         self.target = self.sim.getObject('/target')
-        self.cylinder = self.sim.getObject('/conferenceChair')
+        self.cylinder = self.sim.getObject('/Cylinder')
         # 用机械臂集合来代表整条机械臂
-        self.arm_collection = self.sim.getObject('/LBR_iiwa_7_R800')
-
+        base_link = self.sim.getObject('/LBR_iiwa_7_R800')  # 模型根节点
+        coll = self.sim.createCollection(0)
+        self.sim.addItemToCollection(
+            coll,  # ① collectionHandle
+            self.sim.handle_tree,  # ② what
+            base_link,  # ③ objectHandle
+            2  # ④ options
+        )
+        self.arm_collection = coll
     def sample_action(self):
         """
         随机采样一个动作，用于测试
@@ -181,8 +188,9 @@ class ArmEnv(object):
         finger_orient = self.sim.getObjectOrientation(self.tip, self.goal)
 
         # 使用机械臂集合与 Cylinder 进行距离检测（偏移量传入独立数值）
-        res = self.sim.checkDistance(self.arm_collection, self.cylinder, 0, 0, 0)
+        res = self.sim.checkDistance(self.arm_collection, self.cylinder)
         distance_Cylinder = res[1]
+        #print("distance_Cylinder", distance_Cylinder)
         if isinstance(distance_Cylinder, list):
             distance_Cylinder = min(distance_Cylinder)
 

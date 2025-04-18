@@ -62,6 +62,7 @@ def train():
             less efficient to explore the environment and learn the policy.
             After all, collision does not bring real damage if we train in simulation.
             '''
+            #print('minimum_distance', minimum_distance)
             if minimum_distance <= 0:
                 collision_flag = True
 
