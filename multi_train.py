@@ -46,7 +46,7 @@ def train_instance(sim_port):
 
 if __name__ == '__main__':
     # 要并行训练的端口号，与启动实例时的端口号一致
-    ports = [23000, 23001, 23002]
+    ports = [23000]
 
     # 使用 multiprocessing 启动多个训练进程
     processes = []

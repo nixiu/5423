@@ -6,6 +6,7 @@ import skfuzzy as fuzz
 import skfuzzy.control as ctrl
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
 import time
+SUBSTEPS = 4
 class FuzzyReward(object):
     """
     Fuzzy system is mainly used to calculate rewards without manually establishing perfect explicit reward functions.
@@ -101,10 +102,13 @@ class FuzzyReward(object):
 
 
 class ArmEnv(object):
-    action_bound = [-1, 1]
+    action_bound = [-1.5, 1.5]
     state_dim = 21
     action_dim = 7
-
+    distance_old = 0
+    distance_new = 0
+    orient_old = 0
+    orient_new = 0
     def __init__(self, sim_port=23000):
         self.sim_port = sim_port
         self.connect_to_Coppeliasim()
@@ -119,16 +123,27 @@ class ArmEnv(object):
         self.dist_norm2 = 0.05
 
     def connect_to_Coppeliasim(self):
-        print(f"Program started on port {self.sim_port}")
-        # 假定 RemoteAPIClient 构造函数支持传入 port 参数
+
+        print(f'Program started on port {self.sim_port}')
         self.client = RemoteAPIClient(port=self.sim_port)
-        # 如果库版本不支持，可以考虑在 require 时传入参数（参照文档）
         self.sim = self.client.require('sim')
 
-        self.clientID = 0  # 占位，实际连接成功后无须使用
-        print(f"Connected to remote API server on port {self.sim_port}")
-        # 为了保险起见，也可以等待一小段时间确保连接稳定：
-        time.sleep(1)
+        # ----------- 加速基础设置 -----------
+        #self.sim.setBoolParam(self.sim.boolparam_realtime_simulation, False)  # ① 关实时锁
+        #self.sim.startSimulation()  # ③ 开始仿真
+        #self.client.setStepping(True)  # ② 开同步步进
+
+        # -----------------------------------
+
+        # GUI 专属：只有窗口存在时才无限加速
+        try:
+            self.sim.setInt32Param(self.sim.intparam_speedmodifier, 0)  # 0 = 无限
+        except Exception as e:
+            # 356 = headless 实例，没有 GUI，安全忽略
+            if '356' not in str(e):
+                raise
+
+        print(f'Connected to remote API server on port {self.sim_port}')
 
     def retrieve_Object_Handles(self):
         self.arm_joint = {}
@@ -142,7 +157,7 @@ class ArmEnv(object):
         self.goal = self.sim.getObject('/goal')
         self.tip = self.sim.getObject('/tip')
         self.target = self.sim.getObject('/target')
-        self.cylinder = self.sim.getObject('/Cylinder')
+        self.cylinder = self.sim.getObject('/conferenceChair')
         # 用机械臂集合来代表整条机械臂
         base_link = self.sim.getObject('/LBR_iiwa_7_R800')  # 模型根节点
         coll = self.sim.createCollection(0)
@@ -182,17 +197,19 @@ class ArmEnv(object):
         # 设置各关节的新角度
         for i in range(7):
             self.sim.setJointPosition(self.arm_joint[i], self.arm_info[i])
-
+        # for _ in range(SUBSTEPS):
+        #     self.sim.step()  # 让引擎真正前进 SUBSTEPS×dt
         # 获取 TCP（工具末端）的位置信息与朝向
         finger_xyz = self.sim.getObjectPosition(self.tip, -1)
         finger_orient = self.sim.getObjectOrientation(self.tip, self.goal)
-
+        #print(finger_xyz)
+        #print(finger_orient)
         # 使用机械臂集合与 Cylinder 进行距离检测（偏移量传入独立数值）
         res = self.sim.checkDistance(self.arm_collection, self.cylinder)
         distance_Cylinder = res[1]
         #print("distance_Cylinder", distance_Cylinder)
         if isinstance(distance_Cylinder, list):
-            distance_Cylinder = min(distance_Cylinder)
+            distance_Cylinder = distance_Cylinder[-1]
 
         # 计算归一化的位置信息及姿态误差
         dist1 = [(self.goal_pose['x'] - finger_xyz[0]) / self.dist_norm,
@@ -209,7 +226,22 @@ class ArmEnv(object):
         delta_orient = (np.abs(dist2[0]) + np.abs(dist2[1]) + np.abs(dist2[2])) / 3
 
         # 计算基于 fuzzy 系统的奖励
-        r = self.fuzzy_reward_system.fuzzy_reward(delta_pos, delta_orient)
+        r = - delta_pos - delta_orient
+
+        """r2"""
+        self.distance_new = np.sqrt(dist1[0] ** 2 + dist1[1] ** 2 + dist1[2] ** 2)
+        if self.distance_new < self.distance_old:
+            r += 0.05
+        else:
+            r -= 0.05
+        self.distance_old = self.distance_new.copy()
+
+        self.orient_new = np.abs(dist2[0]) + np.abs(dist2[1]) + np.abs(dist2[2])
+        if self.orient_new < self.orient_old:
+            r += 0.03
+        elif self.orient_new > self.orient_old:
+            r -= 0.03
+        self.orient_old = self.orient_new.copy()
 
         # 额外奖励（如避障和目标达成奖励）计算，与原代码一致
         c1 = 0.05
@@ -269,11 +301,11 @@ class ArmEnv(object):
 
         finger_xyz = self.sim.getObjectPosition(self.tip, -1)
         finger_orient = self.sim.getObjectOrientation(self.tip, self.goal)
-        # 使用机械臂集合与 Cylinder 进行距离检测
-        res = self.sim.checkDistance(self.arm_collection, self.cylinder, 0, 0, 0)
+        res = self.sim.checkDistance(self.arm_collection, self.cylinder)
         distance_Cylinder = res[1]
+        #print("distance_Cylinder", distance_Cylinder)
         if isinstance(distance_Cylinder, list):
-            distance_Cylinder = min(distance_Cylinder)
+            distance_Cylinder = distance_Cylinder[-1]
 
         dist1 = [(self.goal_pose['x'] - finger_xyz[0]) / self.dist_norm,
                  (self.goal_pose['y'] - finger_xyz[1]) / self.dist_norm,
@@ -294,8 +326,8 @@ class ArmEnv(object):
         self.goal_pose['z'] = 0.7 + (2 * np.random.rand() - 1) * 0.025
         goal_pos = np.array([self.goal_pose['x'], self.goal_pose['y'], self.goal_pose['z']]).tolist()
         self.on_goal = 0
-        self.arm_info = [0, 0, 0, -90 * np.pi / 180, 0, 90 * np.pi / 180, 0]
-        cylinder_pos = [0.925, 0.125, 0.90]
+        self.arm_info = [90 * np.pi / 180, 0, 0, -90 * np.pi / 180, 0, 90 * np.pi / 180, 0]
+        cylinder_pos = [0.925, 0.124, 0.90]
 
         for k in range(7):
             self.sim.setJointPosition(self.arm_joint[k], self.arm_info[k])
@@ -305,10 +337,11 @@ class ArmEnv(object):
         finger_xyz = self.sim.getObjectPosition(self.tip, -1)
         finger_orient = self.sim.getObjectOrientation(self.tip, self.goal)
         # 使用机械臂集合与 Cylinder 进行距离检测
-        res = self.sim.checkDistance(self.arm_collection, self.cylinder, 0, 0, 0)
-        distance_arm_cylinder = res[1]
-        if isinstance(distance_arm_cylinder, list):
-            distance_arm_cylinder = min(distance_arm_cylinder)
+        res = self.sim.checkDistance(self.arm_collection, self.cylinder)
+        distance_Cylinder = res[1]
+        print("distance_Cylinder", distance_Cylinder)
+        if isinstance(distance_Cylinder, list):
+            distance_Cylinder = distance_Cylinder[-1]
 
         dist1 = [(self.goal_pose['x'] - finger_xyz[0]) / self.dist_norm,
                  (self.goal_pose['y'] - finger_xyz[1]) / self.dist_norm,
@@ -320,7 +353,7 @@ class ArmEnv(object):
                             np.array([self.goal_pose['x'], self.goal_pose['y'], self.goal_pose['z']]) / self.dist_norm,
                             dist1,
                             dist2,
-                            [distance_arm_cylinder],
+                            [distance_Cylinder],
                             [1. if self.on_goal else 0.]))
         return s
 
