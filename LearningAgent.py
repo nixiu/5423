@@ -7,8 +7,8 @@ This code is written by Ying Fengkang, Huang Huishi, and Liu Yulin from National
 from OpenAIGym import ArmEnv
 from Neural_Network_E3AC import E3AC
 from Neural_Network_SAC import SACAgent
-MAX_EPISODES = 1500
-MAX_EPISODES_STEPS = 300
+MAX_EPISODES = 500
+MAX_EPISODES_STEPS = 500
 batch_size = 64
 ON_TRAIN = True  # set "ON_TRAIN=True" to train agent, set is as False to evaluate a trained agent.
 
@@ -26,17 +26,19 @@ rl = SACAgent(state_dim, action_dim, action_bound)
 
 import time
 def train():
+    #rl.load()
     for i in range(MAX_EPISODES):
         state = env.reset()
         episode_reward = 0.
         collision_flag = False
         start_time = time.time()
-
+        if i%100 == 0:
+            rl.save()
         for j in range(MAX_EPISODES_STEPS):
             action = rl.select_action(state, evaluate=False)
             next_state, reward, done, pose_error, orient_error, minimum_distance = env.step(action)
 
-            if minimum_distance <= 0:
+            if minimum_distance <= 0.005:
                 collision_flag = True
 
             # 存储 transition
@@ -65,8 +67,8 @@ def eval():
     # load a well-trained network model.
     rl.load()
     print('Load well-trained network parameters.')
-
-    for i in range(MAX_EPISODES):
+    test_episodes = 10
+    for i in range(test_episodes):
         state = env.reset()
         episode_reward = 0.
         collision_flag = False
@@ -80,7 +82,8 @@ def eval():
             # print('q_list_for_action_candidates', q_list_for_action_candidates)
 
             next_state, reward, done, pose_error, orient_error, minimum_distance = env.step(action)
-
+            if minimum_distance <= 0.005:
+                collision_flag = True
             episode_reward += reward
 
             state = next_state
